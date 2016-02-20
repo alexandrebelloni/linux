@@ -153,6 +153,15 @@
 						atmel,pins =
 							<AT91_PIOE 4 AT91_PERIPH_GPIO AT91_PINCTRL_NONE>;
 					};
+					pinctrl_i2c1_pu: i2c1_pu {
+						atmel,pins =
+							<AT91_PIOE 29 AT91_PERIPH_C AT91_PINCTRL_PULL_UP	/* TWD1, conflicts with UART0 RX and DIBP */
+							 AT91_PIOE 30 AT91_PERIPH_C AT91_PINCTRL_PULL_UP>;	/* TWCK1, conflicts with UART0 TX and DIBN */
+					};
+					pinctrl_rtc_int: rtc_int {
+						atmel,pins =
+							<AT91_PIOD 8 AT91_PERIPH_GPIO AT91_PINCTRL_PULL_UP_DEGLITCH>;
+					};
 				};
 			};
 		};
@@ -294,5 +303,62 @@
 		regulator-max-microvolt = <3300000>;
 		vin-supply = <&vcc_3v3_reg>;
 		regulator-always-on;
+	};
+};
+
+&spi1 {
+// J17, 10:CS 11:MOSI 12:MISO 13:CLK
+	rtc@0 {
+		compatible = "nxp,rtc-pcf2123";
+		spi-max-frequency = <10000000>;
+		spi-cs-high;
+		reg = <0x0>;
+	};
+};
+
+&i2c1 {
+	pinctrl-0 = <&pinctrl_i2c1_pu>;
+	status = "okay";
+
+	rv8803@32 {
+		compatible = "microcrystal,rv8803";
+		reg = <0x32>;
+	};
+
+	rtc@51 {
+		//compatible = "nxp,pcf85363";
+		//compatible = "nxp,pcf85063";
+		compatible = "nxp,pcf2127";
+		//compatible = "microcrystal,rv8263";
+		reg = <0x51>;
+		pinctrl-0 = <&pinctrl_rtc_int>;
+		interrupts-extended = <&pioD 8 0>;
+	};
+
+	ds1307@68 {
+		compatible = "dallas,ds1307";
+		reg = <0x68>;
+		pinctrl-0 = <&pinctrl_rtc_int>;
+		interrupts-extended = <&pioD 8 0>;
+		status = "disabled";
+	};
+
+	rv1805@69 {
+		compatible = "microcrystal,rv1805";
+		reg = <0x69>;
+		status = "disabled";
+	};
+
+	rtc@6f {
+		compatible = "microchip,mcp7941x";
+		reg = <0x6f>;
+		pinctrl-0 = <&pinctrl_rtc_int>;
+		interrupts-extended = <&pioD 8 0>;
+		status = "disabled";
+	};
+
+	sensor@40 {
+		compatible = "silabs,si7020";
+		reg = <0x40>;
 	};
 };
