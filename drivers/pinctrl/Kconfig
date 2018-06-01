@@ -327,10 +327,8 @@ config PINCTRL_RK805
 	  This selects the pinctrl driver for RK805.
 
 config PINCTRL_OCELOT
-	bool "Pinctrl driver for the Microsemi Ocelot SoCs"
-	default y
+	bool "Pinctrl driver for the Microsemi Ocelot and Jaguar2 SoCs"
 	depends on OF
-	depends on MSCC_OCELOT || COMPILE_TEST
 	select GPIOLIB
 	select GPIOLIB_IRQCHIP
 	select GENERIC_PINCONF
