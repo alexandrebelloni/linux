@@ -1,0 +1,58 @@
+/*
+ * Copyright (C) 2015, Freescale Semiconductor
+ *
+ * Mingkai Hu <Mingkai.hu@freescale.com>
+ * Hou Zhiqiang <B48286@freescale.com>
+ *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2.  This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
+ */
+
+/dts-v1/;
+
+/ {
+	description = "Image file for the MPXLS1046 Linux Kernel";
+	#address-cells = <1>;
+
+	images {
+		kernel {
+			description = "ARM64 Linux kernel";
+			data = /incbin/("./arch/arm64/boot/Image.gz");
+			type = "kernel";
+			arch = "arm64";
+			os = "linux";
+			compression = "gzip";
+			load = <0x80080000>;
+			entry = <0x80080000>;
+		};
+		fdt {
+			description = "Flattened Device Tree blob";
+			data = /incbin/("./arch/arm64/boot/dts/freescale/fsl-ls1046a-miriac-sbc1046.dtb");
+			type = "flat_dt";
+			arch = "arm64";
+			compression = "none";
+			load = <0x90000000>;
+		};
+		/*
+		ramdisk {
+			description = "LS1046 Ramdisk";
+                        data = /incbin/("/home/alex/M/armv8.cpio");
+			type = "ramdisk";
+			arch = "arm64";
+			os = "linux";
+			compression = "none";
+		};
+		*/
+	};
+
+	configurations {
+		default = "mpxls1046";
+		mpxls1046 {
+			description = "Boot Linux kernel";
+			kernel = "kernel";
+			fdt = "fdt";
+			//ramdisk = "ramdisk@1";
+		};
+	};
+};
