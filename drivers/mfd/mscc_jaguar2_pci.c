@@ -15,8 +15,11 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/pci.h>
+#include <linux/uio_driver.h>
 
 #define JAGUAR2_SWITCH_BAR	0
+#define JAGUAR2_CONFIG_BAR	1
+#define JAGUAR2_DDR_BAR		2
 
 #define PCI_VENDOR_ID_MSCC		0x101b
 #define PCI_DEVICE_ID_MSCC_JAGUAR	0xb003
@@ -43,10 +46,6 @@ MODULE_DEVICE_TABLE(pci, jaguar2_ids);
 #define ICPU_PCIE_INTR_CFG_INTR_FALLING_ENA		BIT(1)
 #define ICPU_PCIE_INTR_CFG_INTR_RISING_ENA		BIT(0)
 
-/*
- * Irqchip, TODO: replace by the upstream ocelot irchip driver once the domain
- * issue is solved
- */
 static void __iomem *iomap;
 
 #define ICPU_CFG_INTR_INTR_STICKY	0x80
@@ -58,7 +57,14 @@ static void __iomem *iomap;
 
 #define JAGUAR2_NR_IRQ 29
 
-static void ocelot_irq_unmask(struct irq_data *data)
+struct uio_jaguar2 {
+    struct uio_info uio;
+    spinlock_t lock;
+    unsigned long flags;
+    struct pci_dev *pdev;
+};
+
+static void jaguar2_irq_unmask(struct irq_data *data)
 {
 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(data);
 	struct irq_chip_type *ct = irq_data_get_chip_type(data);
@@ -76,14 +82,18 @@ static void ocelot_irq_unmask(struct irq_data *data)
 	irq_gc_unlock(gc);
 }
 
-static void ocelot_irq_handler(struct irq_desc *desc)
+static void jaguar2_irq_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct irq_domain *d = irq_desc_get_handler_data(desc);
 	struct irq_chip_generic *gc = irq_get_domain_generic_chip(d, 0);
-	u32 reg = irq_reg_readl(gc, ICPU_CFG_INTR_DST_INTR_IDENT(0));
+	u32 uio, reg = irq_reg_readl(gc, ICPU_CFG_INTR_DST_INTR_IDENT(0));
+	u32 mask = *gc->chip_types[0].mask_cache;
+	struct uio_jaguar2 *priv = gc->private;
 
-	pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
+	uio = reg & mask;
+	reg &= ~mask;
+
 	chained_irq_enter(chip, desc);
 
 	while (reg) {
@@ -94,9 +104,17 @@ static void ocelot_irq_handler(struct irq_desc *desc)
 	}
 
 	chained_irq_exit(chip, desc);
+
+	if (uio) {
+		if (!test_and_set_bit(0, &priv->flags))
+			pci_intx(priv->pdev, 0);
+		uio_event_notify(&priv->uio);
+	}
+
 }
 
-static int __init ocelot_irq_common_init(struct pci_dev *pdev, int size)
+static int __init jaguar2_irq_common_init(struct pci_dev *pdev, int size,
+					  struct uio_jaguar2 *priv)
 {
 	struct irq_domain *domain;
 	struct irq_chip_generic *gc;
@@ -131,13 +149,16 @@ static int __init ocelot_irq_common_init(struct pci_dev *pdev, int size)
 	gc->chip_types[0].regs.mask = ICPU_CFG_INTR_INTR_ENA_CLR;
 	gc->chip_types[0].chip.irq_ack = irq_gc_ack_set_bit;
 	gc->chip_types[0].chip.irq_mask = irq_gc_mask_set_bit;
-	gc->chip_types[0].chip.irq_unmask = ocelot_irq_unmask;
+	gc->chip_types[0].chip.irq_unmask = jaguar2_irq_unmask;
+	gc->mask_cache = 0xffffffff;
+
+	gc->private = priv;
 
 	/* Mask and ack all interrupts */
 	irq_reg_writel(gc, 0, ICPU_CFG_INTR_INTR_ENA);
 	irq_reg_writel(gc, 0xffffffff, ICPU_CFG_INTR_INTR_STICKY);
 
-	irq_set_chained_handler_and_data(pdev->irq, ocelot_irq_handler,
+	irq_set_chained_handler_and_data(pdev->irq, jaguar2_irq_handler,
 					 domain);
 
 	return 0;
@@ -151,10 +172,33 @@ err_domain_remove:
 	return ret;
 }
 
+static int jaguar2_irqcontrol(struct uio_info *dev_info, s32 irq_on)
+{
+	struct uio_jaguar2 *priv = dev_info->priv;
+	unsigned long flags;
+
+	spin_lock_irqsave(&priv->lock, flags);
+	if (irq_on) {
+		if (test_and_clear_bit(0, &priv->flags))
+			pci_intx(priv->pdev, 1);
+	} else {
+		if (!test_and_set_bit(0, &priv->flags))
+			pci_intx(priv->pdev, 0);
+	}
+	spin_unlock_irqrestore(&priv->lock, flags);
+
+	return 0;
+}
+
 static int jaguar2_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
+	struct uio_jaguar2 *priv;
+	struct uio_info *info;
 	int ret;
 	resource_size_t offset;
+
+	if (!pdev->dev.of_node)
+		return -ENODEV;
 
 	ret = pcim_enable_device(pdev);
 	if (ret)
@@ -175,13 +219,43 @@ static int jaguar2_pci_probe(struct pci_dev *pdev, const struct pci_device_id *i
 	pci_set_master(pdev);
 	pci_enable_msi(pdev);
 
+	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	info = &priv->uio;
+	info->priv = priv;
+
 	iomap = pcim_iomap(pdev, JAGUAR2_SWITCH_BAR, 0);
+	if (!iomap)
+		return -ENOMEM;
+
+	info->mem[0].addr = pci_resource_start(pdev, JAGUAR2_SWITCH_BAR);
+	info->mem[0].size = pci_resource_len(pdev, JAGUAR2_SWITCH_BAR);
+	info->mem[0].memtype = UIO_MEM_PHYS;
+	info->mem[0].internal_addr = iomap;
+
+	info->mem[1].addr = pci_resource_start(pdev, JAGUAR2_CONFIG_BAR);
+	info->mem[1].size = pci_resource_len(pdev, JAGUAR2_CONFIG_BAR);
+	info->mem[1].memtype = UIO_MEM_PHYS;
+
+	info->name = "vcoreiii_switch";
+	info->version = "0";
+	info->irq = UIO_IRQ_CUSTOM;
+	info->irqcontrol = jaguar2_irqcontrol;
+
+	spin_lock_init(&priv->lock);
+	priv->flags = 0; /* interrupt is enabled to begin with */
+	priv->pdev = pdev;
+
+	ret = uio_register_device(&pdev->dev, info);
+	if (ret)
+		return ret;
+
+	pci_set_drvdata(pdev, info);
 
 	dev_info(&pdev->dev, "JAGUAR2: %x\n",
 		 (readl(iomap + 0x1010000) >> 12) & 0xffff);
-
-	if (!pdev->dev.of_node)
-		return -ENODEV;
 
 	/* Route IRQs to PCI IRQs (both legacy and MSI) */
 	writel(0xffffffff, ICPU_INTR_DST_INTR_MAP0 + iomap);
@@ -196,13 +270,16 @@ static int jaguar2_pci_probe(struct pci_dev *pdev, const struct pci_device_id *i
 	       iomap);
 	writel(ICPU_PCIE_INTR_COMMON_CFG_PCIE_INTR_ENA,
 	       ICPU_PCIE_INTR_COMMON_CFG + iomap);
-	ocelot_irq_common_init(pdev, JAGUAR2_NR_IRQ);
+	jaguar2_irq_common_init(pdev, JAGUAR2_NR_IRQ, priv);
 
 	return of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
 }
 
 static void jaguar2_pci_remove(struct pci_dev *pdev)
 {
+	struct uio_info *info = pci_get_drvdata(pdev);
+
+	uio_unregister_device(info);
 }
 
 static struct pci_driver jaguar2_pci_driver = {
