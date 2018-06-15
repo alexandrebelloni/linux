@@ -844,6 +844,7 @@ config MFD_MSCC_JAGUAR2_PCI
 	depends on PCI
 	select MFD_CORE
 	select PINCTRL
+	select UIO
 	help
 	  This MFD provides support for a Jaguar2 SoC connected as a PCI device
 	  on a host. It splits all the SoC devices to their respective drivers.
