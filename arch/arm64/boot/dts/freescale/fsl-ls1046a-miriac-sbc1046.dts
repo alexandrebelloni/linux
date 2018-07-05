@@ -136,7 +136,7 @@
 			interrupt-parent = <&jaguar2>;
 
 			jaguar_clk: jaguar-clock {
-				compatible = "fixed-clock";
+				compatible = "fixed-clock-fixed";
 				#clock-cells = <0>;
 				clock-frequency = <250000000>;
 			};
