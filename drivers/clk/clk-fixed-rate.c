@@ -195,6 +195,7 @@ void __init of_fixed_clk_setup(struct device_node *node)
 	_of_fixed_clk_setup(node);
 }
 CLK_OF_DECLARE(fixed_clk, "fixed-clock", of_fixed_clk_setup);
+CLK_OF_DECLARE(fixed_clk_fixed, "fixed-clock-fixed", of_fixed_clk_setup);
 
 static int of_fixed_clk_remove(struct platform_device *pdev)
 {
@@ -224,6 +225,7 @@ static int of_fixed_clk_probe(struct platform_device *pdev)
 
 static const struct of_device_id of_fixed_clk_ids[] = {
 	{ .compatible = "fixed-clock" },
+	{ .compatible = "fixed-clock-fixed" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, of_fixed_clk_ids);
