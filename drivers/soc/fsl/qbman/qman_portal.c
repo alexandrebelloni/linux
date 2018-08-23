@@ -277,6 +277,8 @@ static int qman_portal_probe(struct platform_device *pdev)
 	}
 
 	pcfg->pools = qm_get_pools_sdqcr();
+	if (pcfg->pools == 0)
+		return -EPROBE_DEFER;
 
 	spin_lock(&qman_lock);
 	cpu = cpumask_next_zero(-1, &portal_cpus);
