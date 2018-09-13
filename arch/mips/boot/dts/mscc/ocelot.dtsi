@@ -65,6 +65,14 @@
 			interrupts = <2>;
 		};
 
+		dma: dma-controller@1a0 {
+			compatible = "mscc,ocelot-fdma";
+			reg = <0x1a0 0x1c4>;
+			interrupts = <16>;
+			#dma-cells = <1>;
+			dma-channels = <4>;
+		};
+
 		uart0: serial@100000 {
 			pinctrl-0 = <&uart_pins>;
 			pinctrl-names = "default";
