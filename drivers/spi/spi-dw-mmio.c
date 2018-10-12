@@ -44,10 +44,12 @@ struct dw_spi_mmio {
 #define MSCC_SPI_MST_SW_MODE			0x14
 #define MSCC_SPI_MST_SW_MODE_SW_PIN_CTRL_MODE	BIT(13)
 #define MSCC_SPI_MST_SW_MODE_SW_SPI_CS(x)	(x << 5)
+#define MSCC_SPI_MST_SW_MODE_SW_SPI_CS_OE(x)	(x << 1)
 
 struct dw_spi_mscc {
 	struct regmap       *syscon;
 	void __iomem        *spi_mst;
+	u32                 if_si_owner_offset;
 };
 
 /*
@@ -97,6 +99,8 @@ static int dw_spi_mscc_init(struct platform_device *pdev,
 	dwsmscc->syscon = syscon_regmap_lookup_by_compatible(cpu_syscon);
 	if (IS_ERR(dwsmscc->syscon))
 		return PTR_ERR(dwsmscc->syscon);
+
+	dwsmscc->if_si_owner_offset = if_si_owner_offset;
 
 	/* Deassert all CS */
 	writel(0, dwsmscc->spi_mst + MSCC_SPI_MST_SW_MODE);
@@ -226,6 +230,22 @@ static int dw_spi_mmio_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static void dw_spi_mmio_shutdown(struct platform_device *pdev)
+{
+	struct dw_spi_mmio *dwsmmio = platform_get_drvdata(pdev);
+	struct dw_spi_mscc *dwsmscc = dwsmmio->priv;
+
+	writel(MSCC_SPI_MST_SW_MODE_SW_PIN_CTRL_MODE |
+	       MSCC_SPI_MST_SW_MODE_SW_SPI_CS_OE(1) |
+	       MSCC_SPI_MST_SW_MODE_SW_SPI_CS(1),
+	       dwsmscc->spi_mst + MSCC_SPI_MST_SW_MODE);
+
+	/* Make the SI back to boot mode */
+	regmap_update_bits(dwsmscc->syscon, MSCC_CPU_SYSTEM_CTRL_GENERAL_CTRL,
+			   MSCC_IF_SI_OWNER_MASK << dwsmscc->if_si_owner_offset,
+			   MSCC_IF_SI_OWNER_SIBM << dwsmscc->if_si_owner_offset);
+}
+
 static const struct of_device_id dw_spi_mmio_of_match[] = {
 	{ .compatible = "snps,dw-apb-ssi", },
 	{ .compatible = "mscc,ocelot-spi", .data = dw_spi_mscc_ocelot_init},
@@ -237,6 +257,7 @@ MODULE_DEVICE_TABLE(of, dw_spi_mmio_of_match);
 static struct platform_driver dw_spi_mmio_driver = {
 	.probe		= dw_spi_mmio_probe,
 	.remove		= dw_spi_mmio_remove,
+	.shutdown	= dw_spi_mmio_shutdown,
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.of_match_table = dw_spi_mmio_of_match,
