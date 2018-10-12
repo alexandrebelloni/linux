@@ -544,6 +544,81 @@ static int ocelot_gen_ifh(u32 *ifh, struct frame_info *info)
 	return 0;
 }
 
+static void ocelot_port_tx_dma_cb(void *data)
+{
+	struct ocelot_port *port = data;
+	struct ocelot *ocelot = port->ocelot;
+
+	dma_unmap_single(ocelot->dev, port->tx_dmabuf, port->tx_skb->len,
+			 DMA_TO_DEVICE);
+
+	skb_tx_timestamp(port->tx_skb);
+	port->dev->stats.tx_packets++;
+	port->dev->stats.tx_bytes += port->tx_skb->len;
+
+	dev_kfree_skb_any(port->tx_skb);
+
+	port->tx_skb = NULL;
+}
+
+static int ocelot_port_xmit_dma(struct sk_buff *skb, struct net_device *dev)
+{
+	struct ocelot_port *port = netdev_priv(dev);
+	struct ocelot *ocelot = port->ocelot;
+	u32 *ifh;
+	struct frame_info info = {};
+	unsigned int i, length;
+	struct dma_async_tx_descriptor *tx;
+	dma_addr_t tx_dmabuf;
+
+	if (skb_shinfo(skb)->nr_frags == 0)
+		length = skb->len;
+	else
+		length = skb_headlen(skb);
+
+#if 0
+	print_hex_dump(KERN_ERR, "TX: ", DUMP_PREFIX_OFFSET, 16, 1,
+		       skb->data, length, true);
+
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+		pr_err("frag %d\n", i);
+		print_hex_dump(KERN_ERR, "TX: ", DUMP_PREFIX_OFFSET, 16, 1,
+			       skb_frag_address(&skb_shinfo(skb)->frags[i]),
+			       skb_shinfo(skb)->frags[i].size, true);
+	}
+#endif
+
+	if (skb_headroom(skb) < IFH_LEN * sizeof(u32) ||
+	    skb_tailroom(skb) < ETH_FCS_LEN) {
+		// TODO: skb_copy_expand or fallback on register based TX
+		dev_err(ocelot->dev, "Not enough space for IFH or FCS\n");
+		return NETDEV_TX_OK;
+	}
+
+	ifh = skb_push(skb, IFH_LEN * sizeof(u32));
+	skb_put(skb, ETH_FCS_LEN);
+
+	info.port = BIT(port->chip_port);
+	info.tag_type = IFH_TAG_TYPE_C;
+	info.vid = skb_vlan_tag_get(skb);
+	ocelot_gen_ifh(ifh, &info);
+
+	tx_dmabuf = dma_map_single(ocelot->dev, skb->data, skb->len, DMA_TO_DEVICE);
+	//TODO handle error
+	tx = dmaengine_prep_slave_single(ocelot->txdma, tx_dmabuf, skb->len,
+					 DMA_MEM_TO_DEV, 0);
+	if (tx) {
+		tx->callback = ocelot_port_tx_dma_cb;
+		tx->callback_param = port;
+		port->tx_skb = skb;
+		port->tx_dmabuf = tx_dmabuf;
+		dmaengine_submit(tx);
+		dma_async_issue_pending(ocelot->txdma);
+	}
+
+	return NETDEV_TX_OK;
+}
+
 static int ocelot_port_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ocelot_port *port = netdev_priv(dev);
@@ -552,6 +627,9 @@ static int ocelot_port_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct frame_info info = {};
 	u8 grp = 0; /* Send everything on CPU group 0 */
 	unsigned int i, count, last;
+
+	if (ocelot_use_dma(ocelot))
+		return ocelot_port_xmit_dma(skb, dev);
 
 	val = ocelot_read(ocelot, QS_INJ_STATUS);
 	if (!(val & QS_INJ_STATUS_FIFO_RDY(BIT(grp))) ||
@@ -664,6 +742,89 @@ static int ocelot_rx_frame_word(struct ocelot *ocelot, u8 grp, bool ifh,
 	}
 }
 
+#define DMA_BUFFER_SIZE 2048
+
+static int ocelot_rx_dma_prepare(struct ocelot *ocelot);
+
+static void ocelot_port_rx_dma_cb(void *data)
+{
+	struct ocelot *ocelot = data;
+	struct frame_info info;
+	struct sk_buff *skb = ocelot->rx_skb;
+	struct net_device *dev;
+
+	dma_unmap_single(ocelot->dev, ocelot->rx_dmabuf, DMA_BUFFER_SIZE,
+			 DMA_TO_DEVICE);
+
+	ocelot_parse_ifh((u32 *)skb->data, &info);
+	skb_reserve(skb, IFH_LEN * sizeof(u32));
+
+	skb->dev = dev = ocelot->ports[info.port]->dev;
+	skb_put(skb, info.len);
+
+	/* Everything we see on an interface that is in the HW bridge has
+	 * already been forwarded.
+	 */
+	if (ocelot->bridge_mask & BIT(info.port))
+		skb->offload_fwd_mark = 1;
+
+	skb->protocol = eth_type_trans(skb, dev);
+	netif_rx(skb);
+	dev->stats.rx_bytes += info.len;
+	dev->stats.rx_packets++;
+
+	ocelot_rx_dma_prepare(ocelot);
+}
+
+static int ocelot_rx_dma_prepare(struct ocelot *ocelot)
+{
+	struct sk_buff *skb;
+	int err, i;
+
+	ocelot->rx_dmabuf = 0;
+
+	ocelot->rx_skb = skb = netdev_alloc_skb(NULL, DMA_BUFFER_SIZE);
+	if (skb) {
+		struct dma_async_tx_descriptor *tx;
+
+		ocelot->rx_dmabuf = dma_map_single(ocelot->dev, skb->data,
+						   DMA_BUFFER_SIZE,
+						   DMA_FROM_DEVICE);
+		if (dma_mapping_error(ocelot->dev, ocelot->rx_dmabuf)) {
+			err = -ENOMEM;
+			goto out;
+		}
+
+		tx = dmaengine_prep_slave_single(ocelot->rxdma,
+						 ocelot->rx_dmabuf,
+						 DMA_BUFFER_SIZE,
+						 DMA_DEV_TO_MEM,
+						 DMA_PREP_INTERRUPT);
+		if (!tx) {
+			err = -ENOMEM;
+			goto out;
+		}
+
+		tx->callback_param = ocelot;
+		tx->callback = ocelot_port_rx_dma_cb;
+		dmaengine_submit(tx);
+		dma_async_issue_pending(ocelot->rxdma);
+	} else {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	return 0;
+out:
+	if (ocelot->rx_dmabuf)
+		dma_unmap_single(ocelot->dev, ocelot->rx_dmabuf,
+			DMA_BUFFER_SIZE, DMA_FROM_DEVICE);
+	if (skb)
+		dev_kfree_skb(skb);
+
+	return err;
+}
+
 static void ocelot_rx_tasklet(unsigned long arg)
 {
 	struct ocelot *ocelot = (struct ocelot *)arg;
@@ -740,7 +901,6 @@ static void ocelot_rx_tasklet(unsigned long arg)
 		while (ocelot_read(ocelot, QS_XTR_DATA_PRESENT) & BIT(grp))
 			ocelot_read_rix(ocelot, QS_XTR_RD, grp);
 }
-
 
 static void ocelot_mact_mc_reset(struct ocelot_port *port)
 {
@@ -1771,6 +1931,11 @@ int ocelot_probe_port(struct ocelot *ocelot, u8 port,
 	ocelot_mact_learn(ocelot, PGID_CPU, dev->dev_addr, ocelot_port->pvid,
 			  ENTRYTYPE_LOCKED);
 
+	if (ocelot_use_dma(ocelot)) {
+		dev->needed_headroom = IFH_LEN * sizeof(u32);
+		dev->needed_tailroom = ETH_FCS_LEN;
+	}
+
 	err = register_netdev(dev);
 	if (err) {
 		dev_err(ocelot->dev, "register_netdev failed\n");
@@ -1894,13 +2059,26 @@ int ocelot_init(struct ocelot *ocelot)
 			 QSYS_SWITCH_PORT_MODE, cpu);
 	ocelot_write_rix(ocelot, SYS_PORT_MODE_INCL_XTR_HDR(1) |
 			 SYS_PORT_MODE_INCL_INJ_HDR(1), SYS_PORT_MODE, cpu);
-	/* Allow manual injection via DEVCPU_QS registers, and byte swap these
-	 * registers endianness.
-	 */
-	ocelot_write_rix(ocelot, QS_INJ_GRP_CFG_BYTE_SWAP |
-			 QS_INJ_GRP_CFG_MODE(1), QS_INJ_GRP_CFG, 0);
-	ocelot_write_rix(ocelot, QS_XTR_GRP_CFG_BYTE_SWAP |
-			 QS_XTR_GRP_CFG_MODE(1), QS_XTR_GRP_CFG, 0);
+
+	if (ocelot_use_dma(ocelot)) {
+		/* Extraction and injection using DMA */
+		ocelot_write_rix(ocelot, QS_INJ_GRP_CFG_MODE(2),
+				 QS_INJ_GRP_CFG, 0);
+		ocelot_write_rix(ocelot, QS_XTR_GRP_CFG_MODE(2),
+				 QS_XTR_GRP_CFG, 0);
+		ocelot_rx_dma_prepare(ocelot);
+	} else {
+		/* Allow manual injection via DEVCPU_QS registers, and byte swap
+		 * these registers endianness.
+		 */
+		ocelot_write_rix(ocelot, QS_INJ_GRP_CFG_BYTE_SWAP |
+				 QS_INJ_GRP_CFG_MODE(1), QS_INJ_GRP_CFG, 0);
+		ocelot_write_rix(ocelot, QS_XTR_GRP_CFG_BYTE_SWAP |
+				 QS_XTR_GRP_CFG_MODE(1), QS_XTR_GRP_CFG, 0);
+		tasklet_init(&ocelot->tasklet, ocelot_rx_tasklet,
+			     (unsigned long)ocelot);
+	}
+
 	ocelot_write(ocelot, ANA_CPUQ_CFG_CPUQ_MIRROR(2) |
 		     ANA_CPUQ_CFG_CPUQ_LRN(2) |
 		     ANA_CPUQ_CFG_CPUQ_MAC_COPY(2) |
@@ -1915,9 +2093,6 @@ int ocelot_init(struct ocelot *ocelot)
 				 ANA_CPUQ_8021_CFG_CPUQ_BPDU_VAL(6),
 				 ANA_CPUQ_8021_CFG, i);
 
-	tasklet_init(&ocelot->tasklet, ocelot_rx_tasklet,
-		     (unsigned long)ocelot);
-
 	INIT_DELAYED_WORK(&ocelot->stats_work, ocelot_check_stats);
 	queue_delayed_work(ocelot->stats_queue, &ocelot->stats_work,
 			   OCELOT_STATS_CHECK_DELAY);
@@ -1929,6 +2104,10 @@ void ocelot_deinit(struct ocelot *ocelot)
 {
 	destroy_workqueue(ocelot->stats_queue);
 	mutex_destroy(&ocelot->stats_lock);
+	if (!IS_ERR(ocelot->rxdma))
+		dma_release_channel(ocelot->rxdma);
+	if (!IS_ERR(ocelot->txdma))
+		dma_release_channel(ocelot->txdma);
 }
 EXPORT_SYMBOL(ocelot_deinit);
 

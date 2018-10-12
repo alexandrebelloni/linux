@@ -83,6 +83,21 @@ static int mscc_ocelot_probe(struct platform_device *pdev)
 
 	ocelot->targets[HSIO] = hsio;
 
+	ocelot->txdma = dma_request_chan(&pdev->dev, "tx");
+	ocelot->rxdma = dma_request_chan(&pdev->dev, "rx");
+	if (IS_ERR(ocelot->txdma) || IS_ERR(ocelot->rxdma)) {
+		dev_info(&pdev->dev, "Not using DMA: %ld %ld\n",
+			 PTR_ERR(ocelot->rxdma),
+			 PTR_ERR(ocelot->txdma));
+
+		if (!IS_ERR(ocelot->rxdma))
+			dma_release_channel(ocelot->rxdma);
+		if (!IS_ERR(ocelot->txdma))
+			dma_release_channel(ocelot->txdma);
+		ocelot->rxdma = NULL;
+		ocelot->txdma = NULL;
+	}
+
 	err = ocelot_chip_init(ocelot);
 	if (err)
 		return err;
