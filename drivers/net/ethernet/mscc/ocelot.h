@@ -9,6 +9,7 @@
 #define _MSCC_OCELOT_H_
 
 #include <linux/bitops.h>
+#include <linux/dmaengine.h>
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
 #include <linux/platform_device.h>
@@ -505,6 +506,10 @@ struct ocelot {
 	u64 *stats;
 	struct delayed_work stats_work;
 	struct workqueue_struct *stats_queue;
+
+	/* DMA */
+	struct dma_chan *rxdma;
+	struct dma_chan *txdma;
 };
 
 struct ocelot_port {
@@ -527,6 +532,9 @@ struct ocelot_port {
 	u8 vlan_aware;
 
 	u64 *stats;
+
+	struct sk_buff *skb;
+	dma_addr_t tx_dmabuf;
 };
 
 u32 __ocelot_read_ix(struct ocelot *ocelot, u32 reg, u32 offset);
@@ -566,7 +574,7 @@ int ocelot_chip_init(struct ocelot *ocelot);
 int ocelot_probe_port(struct ocelot *ocelot, u8 port,
 		      void __iomem *regs,
 		      struct phy_device *phy);
-
+#define ocelot_use_dma(o) (o->rxdma && o->txdma)
 extern struct notifier_block ocelot_netdevice_nb;
 
 #endif
