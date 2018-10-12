@@ -135,6 +135,8 @@
 				    "qsys", "ana";
 			interrupts = <21 22>;
 			interrupt-names = "xtr", "inj";
+			dmas = <&dma 0>, <&dma 2>;
+			dma-names = "rx", "tx";
 
 			ethernet-ports {
 				#address-cells = <1>;
