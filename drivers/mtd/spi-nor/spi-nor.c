@@ -2643,6 +2643,7 @@ static int spi_nor_parse_bfpt(struct spi_nor *nor,
 		break;
 
 	case BFPT_DWORD1_ADDRESS_BYTES_4_ONLY:
+		nor->flags |= SNOR_F_4B_OPCODES;
 		nor->addr_width = 4;
 		break;
 
@@ -3552,7 +3553,7 @@ static int spi_nor_init(struct spi_nor *nor)
 
 	if ((nor->addr_width == 4) &&
 	    (JEDEC_MFR(nor->info) != SNOR_MFR_SPANSION) &&
-	    !(nor->info->flags & SPI_NOR_4B_OPCODES)) {
+	    !(nor->flags & SNOR_F_4B_OPCODES)) {
 		/*
 		 * If the RESET# pin isn't hooked up properly, or the system
 		 * otherwise doesn't perform a reset command in the boot
@@ -3586,7 +3587,7 @@ void spi_nor_restore(struct spi_nor *nor)
 	/* restore the addressing mode */
 	if ((nor->addr_width == 4) &&
 	    (JEDEC_MFR(nor->info) != SNOR_MFR_SPANSION) &&
-	    !(nor->info->flags & SPI_NOR_4B_OPCODES) &&
+	    !(nor->flags & SNOR_F_4B_OPCODES) &&
 	    (nor->flags & SNOR_F_BROKEN_RESET))
 		set_4byte(nor, nor->info, 0);
 }
@@ -3744,10 +3745,14 @@ int spi_nor_scan(struct spi_nor *nor, const char *name,
 		nor->addr_width = 4;
 		if (JEDEC_MFR(info) == SNOR_MFR_SPANSION ||
 		    info->flags & SPI_NOR_4B_OPCODES)
-			spi_nor_set_4byte_opcodes(nor, info);
+			nor->flags |= SNOR_F_4B_OPCODES;
 	} else {
 		nor->addr_width = 3;
 	}
+
+	if (nor->addr_width == 4 &&
+	    nor->flags & SNOR_F_4B_OPCODES)
+		spi_nor_set_4byte_opcodes(nor, info);
 
 	if (nor->addr_width > SPI_NOR_MAX_ADDR_WIDTH) {
 		dev_err(dev, "address width is too large: %u\n",
