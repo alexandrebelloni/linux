@@ -599,6 +599,149 @@ static int ocelot_port_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
+static int ocelot_parse_ifh(u32 *ifh, struct frame_info *info)
+{
+	int i;
+	u8 llen, wlen;
+
+	/* The IFH is in network order, switch to CPU order */
+	for (i = 0; i < IFH_LEN; i++)
+		ifh[i] = ntohl((__force __be32)ifh[i]);
+
+	wlen = (ifh[1] >> 7) & 0xff;
+	llen = (ifh[1] >> 15) & 0x3f;
+	info->len = OCELOT_BUFFER_CELL_SZ * wlen + llen - 80;
+
+	info->port = (ifh[2] & GENMASK(14, 11)) >> 11;
+
+	info->cpuq = (ifh[3] & GENMASK(27, 20)) >> 20;
+	info->tag_type = (ifh[3] & BIT(16)) >> 16;
+	info->vid = ifh[3] & GENMASK(11, 0);
+
+	return 0;
+}
+
+static int ocelot_rx_frame_word(struct ocelot *ocelot, u8 grp, bool ifh,
+				u32 *rval)
+{
+	u32 val;
+	u32 bytes_valid;
+
+	val = ocelot_read_rix(ocelot, QS_XTR_RD, grp);
+	if (val == XTR_NOT_READY) {
+		if (ifh)
+			return -EIO;
+
+		do {
+			val = ocelot_read_rix(ocelot, QS_XTR_RD, grp);
+		} while (val == XTR_NOT_READY);
+	}
+
+	switch (val) {
+	case XTR_ABORT:
+		return -EIO;
+	case XTR_EOF_0:
+	case XTR_EOF_1:
+	case XTR_EOF_2:
+	case XTR_EOF_3:
+	case XTR_PRUNED:
+		bytes_valid = XTR_VALID_BYTES(val);
+		val = ocelot_read_rix(ocelot, QS_XTR_RD, grp);
+		if (val == XTR_ESCAPE)
+			*rval = ocelot_read_rix(ocelot, QS_XTR_RD, grp);
+		else
+			*rval = val;
+
+		return bytes_valid;
+	case XTR_ESCAPE:
+		*rval = ocelot_read_rix(ocelot, QS_XTR_RD, grp);
+
+		return 4;
+	default:
+		*rval = val;
+
+		return 4;
+	}
+}
+
+static void ocelot_rx_tasklet(unsigned long arg)
+{
+	struct ocelot *ocelot = (struct ocelot *)arg;
+	int i = 0, grp = 0;
+	int err = 0;
+
+	do {
+		struct sk_buff *skb;
+		struct net_device *dev;
+		u32 *buf;
+		int sz, len, buf_len;
+		u32 ifh[4];
+		u32 val;
+		struct frame_info info;
+
+		for (i = 0; i < IFH_LEN; i++) {
+			err = ocelot_rx_frame_word(ocelot, grp, true, &ifh[i]);
+			if (err != 4)
+				break;
+		}
+
+		if (err != 4)
+			break;
+
+		ocelot_parse_ifh(ifh, &info);
+
+		dev = ocelot->ports[info.port]->dev;
+
+		skb = netdev_alloc_skb(dev, info.len);
+
+		if (unlikely(!skb)) {
+			netdev_err(dev, "Unable to allocate sk_buff\n");
+			err = -ENOMEM;
+			break;
+		}
+		buf_len = info.len - ETH_FCS_LEN;
+		buf = (u32 *)skb_put(skb, buf_len);
+
+		len = 0;
+		do {
+			sz = ocelot_rx_frame_word(ocelot, grp, false, &val);
+			*buf++ = val;
+			len += sz;
+		} while (len < buf_len);
+
+		/* Read the FCS */
+		sz = ocelot_rx_frame_word(ocelot, grp, false, &val);
+		/* Update the statistics if part of the FCS was read before */
+		len -= ETH_FCS_LEN - sz;
+
+		if (unlikely(dev->features & NETIF_F_RXFCS)) {
+			buf = (u32 *)skb_put(skb, ETH_FCS_LEN);
+			*buf = val;
+		}
+
+		if (sz < 0) {
+			err = sz;
+			break;
+		}
+
+		/* Everything we see on an interface that is in the HW bridge
+		 * has already been forwarded.
+		 */
+		if (ocelot->bridge_mask & BIT(info.port))
+			skb->offload_fwd_mark = 1;
+
+		skb->protocol = eth_type_trans(skb, dev);
+		netif_rx(skb);
+		dev->stats.rx_bytes += len;
+		dev->stats.rx_packets++;
+	} while (ocelot_read(ocelot, QS_XTR_DATA_PRESENT) & BIT(grp));
+
+	if (err)
+		while (ocelot_read(ocelot, QS_XTR_DATA_PRESENT) & BIT(grp))
+			ocelot_read_rix(ocelot, QS_XTR_RD, grp);
+}
+
+
 static void ocelot_mact_mc_reset(struct ocelot_port *port)
 {
 	struct ocelot *ocelot = port->ocelot;
@@ -1771,6 +1914,9 @@ int ocelot_init(struct ocelot *ocelot)
 		ocelot_write_rix(ocelot, ANA_CPUQ_8021_CFG_CPUQ_GARP_VAL(6) |
 				 ANA_CPUQ_8021_CFG_CPUQ_BPDU_VAL(6),
 				 ANA_CPUQ_8021_CFG, i);
+
+	tasklet_init(&ocelot->tasklet, ocelot_rx_tasklet,
+		     (unsigned long)ocelot);
 
 	INIT_DELAYED_WORK(&ocelot->stats_work, ocelot_check_stats);
 	queue_delayed_work(ocelot->stats_queue, &ocelot->stats_work,

@@ -433,6 +433,8 @@ struct ocelot {
 	u64 *stats;
 	struct delayed_work stats_work;
 	struct workqueue_struct *stats_queue;
+
+	struct tasklet_struct tasklet;
 };
 
 struct ocelot_port {
