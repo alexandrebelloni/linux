@@ -61,6 +61,27 @@
 			AM33XX_PADCONF(AM335X_PIN_MII1_RX_CLK, PIN_OUTPUT_PULLUP, MUX_MODE7)	/* gmii1_rxclk.gpio3_10 LS_BUF_EN */
 		>;
 	};
+
+	rtc_nint_pins: pinmux_rtc_nint_pins {
+		pinctrl-single,pins = <AM33XX_PADCONF(AM335X_PIN_GPMC_A0, PIN_INPUT, MUX_MODE7) >;
+	};
+
+	spi1_pins_s0: spi1_pins_s0 {
+		pinctrl-single,pins = <
+			0x190 0x33 /* mcasp0_aclkx.spi1_sclk, INPUT_PULLUP | MODE3 */
+			0x194 0x33 /* mcasp0_fsx.spi1_d0, INPUT_PULLUP | MODE3 */
+			0x198 0x13 /* mcasp0_axr0.spi1_d1, OUTPUT_PULLUP | MODE3 */
+			0x19c 0x13 /* mcasp0_ahclkr.spi1_cs0, OUTPUT_PULLUP | MODE3 */
+		>;
+	};
+
+	/* Pins 17 (I2C1_SCL) and 18 (I2C1_SDA) of connector P9 */
+	i2c1_pins: pinmux_i2c1_pins {
+		pinctrl-single,pins = <
+			AM33XX_PADCONF(AM335X_PIN_SPI0_D1, PIN_INPUT_PULLUP, MUX_MODE2) /* spi0_d1.i2c1_sda */
+			AM33XX_PADCONF(AM335X_PIN_SPI0_CS0, PIN_INPUT_PULLUP, MUX_MODE2) /* spi0_cs0.i2c1_scl */
+		>;
+	};
 };
 
 &mac_sw {
@@ -108,4 +129,52 @@
 		output-high;
 		line-name = "LS_BUF_EN";
 	};
+};
+
+&spi1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi1_pins_s0>;
+
+	rtc@0 {
+		compatible = "nxp,rtc-pcf2123";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		spi-cs-high;
+		interrupts-extended = <&gpio1 16 GPIO_ACTIVE_LOW>;
+		status = "disabled";
+	};
+};
+
+&i2c1 {
+	status = "okay";
+	clock-frequency = <100000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1_pins>;
+
+	rtc@51 {
+		compatible = "microcrystal,rv3032";
+		reg = <0x51>;
+		status = "okay";
+		pinctrl-0 = <&rtc_nint_pins>;
+		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+#if 0
+	rtc@52 {
+		compatible = "microcrystal,rv3028";
+		reg = <0x52>;
+		status = "okay";
+		pinctrl-0 = <&rtc_nint_pins>;
+		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	rtc@51 {
+		compatible = "nxp,pcf2127";
+		reg = <0x51>;
+		status = "disabled";
+		pinctrl-0 = <&rtc_nint_pins>;
+		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_HIGH>;
+	};
+#endif
 };
