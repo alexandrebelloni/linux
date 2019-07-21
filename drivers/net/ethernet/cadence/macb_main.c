@@ -1436,6 +1436,10 @@ static irqreturn_t macb_interrupt(int irq, void *dev_id)
 			else
 				bp->hw_stats.macb.rx_overruns++;
 
+			if (bp->tx_pause)
+				macb_writel(bp, NCR,
+					   macb_readl(bp, NCR) | MACB_BIT(TXPF));
+
 			if (bp->caps & MACB_CAPS_ISR_CLEAR_ON_WRITE)
 				queue_writel(queue, ISR, MACB_BIT(ISR_ROVR));
 		}
@@ -3148,6 +3152,41 @@ static int gem_set_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd)
 	return ret;
 }
 
+static void macb_get_pauseparam(struct net_device *dev,
+				struct ethtool_pauseparam *ecmd)
+{
+	struct macb *bp = netdev_priv(dev);
+	u32 reg;
+
+	// TODO: get this from the phy
+	ecmd->autoneg = AUTONEG_DISABLE;
+
+	reg = macb_readl(bp, NCFGR);
+	ecmd->rx_pause = !!(reg & MACB_BIT(PAE));
+	ecmd->tx_pause = bp->tx_pause;
+}
+
+static int macb_set_pauseparam(struct net_device *dev,
+			       struct ethtool_pauseparam *ecmd)
+{
+	struct macb *bp = netdev_priv(dev);
+	u32 reg;
+
+	reg = macb_readl(bp, NCFGR);
+	reg &= ~MACB_BIT(PAE);
+
+	if (ecmd->rx_pause)
+		reg |= MACB_BIT(PAE);
+
+	macb_writel(bp, NCFGR, reg);
+
+	bp->tx_pause = ecmd->tx_pause;
+
+	//TODO: set autoneg and update the phy
+
+	return 0;
+}
+
 static const struct ethtool_ops macb_ethtool_ops = {
 	.get_regs_len		= macb_get_regs_len,
 	.get_regs		= macb_get_regs,
@@ -3159,6 +3198,8 @@ static const struct ethtool_ops macb_ethtool_ops = {
 	.set_link_ksettings     = phy_ethtool_set_link_ksettings,
 	.get_ringparam		= macb_get_ringparam,
 	.set_ringparam		= macb_set_ringparam,
+	.get_pauseparam		= macb_get_pauseparam,
+	.set_pauseparam		= macb_set_pauseparam,
 };
 
 static const struct ethtool_ops gem_ethtool_ops = {
@@ -3175,6 +3216,8 @@ static const struct ethtool_ops gem_ethtool_ops = {
 	.set_ringparam		= macb_set_ringparam,
 	.get_rxnfc			= gem_get_rxnfc,
 	.set_rxnfc			= gem_set_rxnfc,
+	.get_pauseparam		= macb_get_pauseparam,
+	.set_pauseparam		= macb_set_pauseparam,
 };
 
 static int macb_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
