@@ -345,14 +345,15 @@ static const struct rtc_class_ops pcf8523_rtc_ops = {
 static int pcf8523_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
-	struct pcf8523 *pcf;
+	struct pcf8523 *pcf8523;
+	struct rtc_device *rtc;
 	int err;
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
 		return -ENODEV;
 
-	pcf = devm_kzalloc(&client->dev, sizeof(*pcf), GFP_KERNEL);
-	if (!pcf)
+	pcf8523 = devm_kzalloc(&client->dev, sizeof(*pcf8523), GFP_KERNEL);
+	if (!pcf8523)
 		return -ENOMEM;
 
 	err = pcf8523_load_capacitance(client);
@@ -364,14 +365,15 @@ static int pcf8523_probe(struct i2c_client *client,
 	if (err < 0)
 		return err;
 
-	pcf->rtc = devm_rtc_device_register(&client->dev, DRIVER_NAME,
-				       &pcf8523_rtc_ops, THIS_MODULE);
-	if (IS_ERR(pcf->rtc))
-		return PTR_ERR(pcf->rtc);
+	rtc = devm_rtc_allocate_device(&client->dev);
+	if (IS_ERR(rtc))
+		return PTR_ERR(rtc);
 
-	i2c_set_clientdata(client, pcf);
+	pcf8523->rtc = rtc;
+	rtc->ops = &pcf8523_rtc_ops;
 
-	return 0;
+
+	return rtc_register_device(rtc);
 }
 
 static const struct i2c_device_id pcf8523_id[] = {
