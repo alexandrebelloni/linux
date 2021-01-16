@@ -208,6 +208,7 @@ static long rtc_dev_ioctl(struct file *file,
 	const struct rtc_class_ops *ops = rtc->ops;
 	struct rtc_time tm;
 	struct rtc_wkalrm alarm;
+	struct rtc_param param;
 	void __user *uarg = (void __user *)arg;
 
 	err = mutex_lock_interruptible(&rtc->ops_lock);
@@ -221,6 +222,7 @@ static long rtc_dev_ioctl(struct file *file,
 	switch (cmd) {
 	case RTC_EPOCH_SET:
 	case RTC_SET_TIME:
+	case RTC_PARAM_SET:
 		if (!capable(CAP_SYS_TIME))
 			err = -EACCES;
 		break;
@@ -381,6 +383,55 @@ static long rtc_dev_ioctl(struct file *file,
 		if (copy_to_user(uarg, &alarm, sizeof(alarm)))
 			err = -EFAULT;
 		return err;
+
+	case RTC_PARAM_GET:
+		if (copy_from_user(&param, uarg, sizeof(param)))
+			err = -EFAULT;
+
+		switch(param.param) {
+			long offset;
+		case RTC_PARAM_FEATURES:
+			if (param.index != 0)
+				err = -EINVAL;
+			param.uvalue = rtc->features[0];
+			break;
+
+		case RTC_PARAM_CORRECTION:
+			mutex_unlock(&rtc->ops_lock);
+			if (param.index != 0)
+				return -EINVAL;
+			err = rtc_read_offset(rtc, &offset);
+			if (err == 0)
+				param.svalue = offset;
+			mutex_lock(&rtc->ops_lock);
+			break;
+
+		default:
+			err = -EINVAL;
+		}
+
+		if (copy_to_user(uarg, &param, sizeof(param)))
+			err = -EFAULT;
+
+		break;
+
+	case RTC_PARAM_SET:
+		if (copy_from_user(&param, uarg, sizeof(param)))
+			err = -EFAULT;
+
+		switch(param.param) {
+		case RTC_PARAM_CORRECTION:
+			mutex_unlock(&rtc->ops_lock);
+			if (param.index != 0)
+				return -EINVAL;
+			return rtc_set_offset(rtc, param.svalue);
+
+		case RTC_PARAM_FEATURES:
+		default:
+			err = -EINVAL;
+		}
+
+		break;
 
 	default:
 		/* Finally try the driver's ioctl interface */
