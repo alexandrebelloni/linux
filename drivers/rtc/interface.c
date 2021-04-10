@@ -545,7 +545,7 @@ EXPORT_SYMBOL_GPL(rtc_alarm_irq_enable);
 
 int rtc_update_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 {
-	int rc = 0, err;
+	int err;
 
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
@@ -562,12 +562,12 @@ int rtc_update_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 		goto out;
 
 	if (rtc->uie_unsupported || !test_bit(RTC_FEATURE_ALARM, rtc->features)) {
+		mutex_unlock(&rtc->ops_lock);
 #ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
-		err = rtc_dev_update_irq_enable_emul(rtc, enabled);
+		return rtc_dev_update_irq_enable_emul(rtc, enabled);
 #else
-		err = -EINVAL;
+		return -EINVAL;
 #endif
-		goto out;
 	}
 
 	if (enabled) {
