@@ -237,15 +237,14 @@
 	};
 #endif
 
-#if 0
 	rtc@51 {
 		compatible = "nxp,pcf2127";
 		reg = <0x51>;
 		pinctrl-0 = <&rtc_nint_pins>;
 		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_HIGH>;
 	};
-#endif
 
+#if 0
 	rtc@52 {
 		compatible = "microcrystal,rv3028";
 		reg = <0x52>;
@@ -253,6 +252,7 @@
 		pinctrl-0 = <&rtc_nint_pins>;
 		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_LOW>;
 	};
+#endif
 
 #if 0
 	rtc@68 {
