@@ -933,6 +933,11 @@ static int rv3032_probe(struct i2c_client *client)
 	if (IS_ERR(rv3032->rtc))
 		return PTR_ERR(rv3032->rtc);
 
+	if (device_property_read_bool(&client->dev, "wakeup-source"))
+		clear_bit(RTC_FEATURE_UPDATE_INTERRUPT, rv3032->rtc->features);
+	else if (!client->irq)
+		clear_bit(RTC_FEATURE_ALARM, rv3032->rtc->features);
+
 	if (client->irq > 0) {
 		unsigned long irqflags = IRQF_TRIGGER_LOW;
 
@@ -945,11 +950,9 @@ static int rv3032_probe(struct i2c_client *client)
 						"rv3032", rv3032);
 		if (ret) {
 			dev_warn(&client->dev, "unable to request IRQ, alarms disabled\n");
-			client->irq = 0;
+			clear_bit(RTC_FEATURE_ALARM, rv3032->rtc->features);
 		}
 	}
-	if (!client->irq)
-		clear_bit(RTC_FEATURE_ALARM, rv3032->rtc->features);
 
 	rv3032_trickle_charger_setup(&client->dev, rv3032);
 
