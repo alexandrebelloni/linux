@@ -965,6 +965,11 @@ static int rv3028_probe(struct i2c_client *client)
 	if (IS_ERR(rv3028->rtc))
 		return PTR_ERR(rv3028->rtc);
 
+	if (device_property_read_bool(&client->dev, "wakeup-source"))
+		clear_bit(RTC_FEATURE_UPDATE_INTERRUPT, rv3028->rtc->features);
+	else if (!client->irq)
+		clear_bit(RTC_FEATURE_ALARM, rv3028->rtc->features);
+
 	if (client->irq > 0) {
 		unsigned long flags;
 
@@ -983,11 +988,9 @@ static int rv3028_probe(struct i2c_client *client)
 						"rv3028", rv3028);
 		if (ret) {
 			dev_warn(&client->dev, "unable to request IRQ, alarms disabled\n");
-			client->irq = 0;
+			clear_bit(RTC_FEATURE_ALARM, rv3028->rtc->features);
 		}
 	}
-	if (!client->irq)
-		clear_bit(RTC_FEATURE_ALARM, rv3028->rtc->features);
 
 	ret = regmap_update_bits(rv3028->regmap, RV3028_CTRL1,
 				 RV3028_CTRL1_WADA, RV3028_CTRL1_WADA);
