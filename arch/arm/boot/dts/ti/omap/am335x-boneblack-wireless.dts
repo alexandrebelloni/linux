@@ -152,6 +152,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c1_pins>;
 
+#if 0
 	rv1805: rtc@69 {
 		compatible = "microcrystal,rv1805";
 		reg = <0x69>;
@@ -159,16 +160,17 @@
 		pinctrl-0 = <&rtc_nint_pins>;
 		interrupts-extended = <&gpio1 16 GPIO_ACTIVE_LOW>;
 	};
+#endif
 
-#if 0
 	rtc@51 {
 		compatible = "microcrystal,rv3032";
 		reg = <0x51>;
 		status = "okay";
 		pinctrl-0 = <&rtc_nint_pins>;
-		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_HIGH>;
+		interrupts-extended = <&gpio1 16 IRQ_TYPE_LEVEL_LOW>;
 	};
 
+#if 0
 	rtc@52 {
 		compatible = "microcrystal,rv3028";
 		reg = <0x52>;
