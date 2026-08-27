@@ -188,10 +188,12 @@ static irqreturn_t rv3032_handle_irq(int irq, void *dev_id)
 	unsigned long events = 0;
 	u32 status = 0, ctrl = 0;
 
+	pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
 	if (regmap_read(rv3032->regmap, RV3032_STATUS, &status) < 0 ||
 	    status == 0) {
 		return IRQ_NONE;
 	}
+	pr_err("ABE: 0x%x\n", status);
 
 	if (status & RV3032_STATUS_TF) {
 		status |= RV3032_STATUS_TF;
@@ -310,6 +312,9 @@ static int rv3032_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	u8 ctrl = 0;
 	int ret;
 
+	pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
+	pr_err("ABE: %ptR\n", &alrm->time);
+
 	ret = regmap_update_bits(rv3032->regmap, RV3032_CTRL2,
 				 RV3032_CTRL2_AIE | RV3032_CTRL2_UIE, 0);
 	if (ret)
@@ -339,6 +344,17 @@ static int rv3032_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	ret = regmap_update_bits(rv3032->regmap, RV3032_CTRL2,
 				 RV3032_CTRL2_UIE | RV3032_CTRL2_AIE, ctrl);
 
+	{
+		int val;
+
+		regmap_read(rv3032->regmap, RV3032_CTRL2, &val);
+		pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
+		pr_err("%x\n", val);
+		regmap_read(rv3032->regmap, RV3032_STATUS, &val);
+		pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
+		pr_err("%x\n", val);
+	}
+
 	return ret;
 }
 
@@ -363,6 +379,18 @@ static int rv3032_alarm_irq_enable(struct device *dev, unsigned int enabled)
 				 RV3032_CTRL2_UIE | RV3032_CTRL2_AIE, ctrl);
 	if (ret)
 		return ret;
+
+	{
+		int val;
+
+		regmap_read(rv3032->regmap, RV3032_CTRL2, &val);
+		pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
+		pr_err("%x\n", val);
+		regmap_read(rv3032->regmap, RV3032_STATUS, &val);
+		pr_err("ABE: %s +%d %s\n", __FILE__, __LINE__, __func__);
+		pr_err("%x\n", val);
+	}
+
 
 	return 0;
 }
